@@ -326,28 +326,3 @@ def run():
             before = list(rows)  # history without this game
             # Record the game FIRST so a crash can never cause a duplicate tweet.
             append_history(g)
-            rows.append({k: str(v) for k, v in g.items()})
-            seen_ids.add(g["espn_id"])
-            seen_keys.add((g["date"], g["msu"], g["opp"]))
-            seen_pairs.add(pair)
-            print(f"{g['date']}  MSU {g['msu']} - {g['opp']} {g['opponent']}  ->",
-                  "SCORIGAMI" if is_new else "seen before")
-            text = build_tweet(g, before, len(seen_pairs), len(rows))
-            print(text)
-            if live:
-                try:
-                    post(text)
-                except Exception as e:  # keep going; game is already recorded
-                    print("TWEET FAILED:", e)
-                    raise
-            else:
-                print("(dry run: set POST_LIVE=true to tweet)")
-
-    try:
-        run_live(rows, seen_pairs, live)
-    except Exception as e:  # live tweets are a bonus; never break the main job
-        print("live-game check failed:", e)
-
-
-if __name__ == "__main__":
-    stats() if "--stats" in sys.argv else run()
