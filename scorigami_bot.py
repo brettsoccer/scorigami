@@ -142,13 +142,28 @@ def build_tweet(game, rows, unique_count, total_games):
 
 def post(text):
     import tweepy
+    keys = {k: os.environ.get(k, "") for k in
+            ("CONSUMER_KEY", "CONSUMER_SECRET", "ACCESS_TOKEN", "ACCESS_TOKEN_SECRET")}
+    for k, v in keys.items():
+        print(f"{k}: length {len(v)}" + (f", starts {v[:4]}" if k == "CONSUMER_KEY" else ""))
     client = tweepy.Client(
-        consumer_key=os.environ["CONSUMER_KEY"],
-        consumer_secret=os.environ["CONSUMER_SECRET"],
-        access_token=os.environ["ACCESS_TOKEN"],
-        access_token_secret=os.environ["ACCESS_TOKEN_SECRET"],
+        consumer_key=keys["CONSUMER_KEY"],
+        consumer_secret=keys["CONSUMER_SECRET"],
+        access_token=keys["ACCESS_TOKEN"],
+        access_token_secret=keys["ACCESS_TOKEN_SECRET"],
     )
-    resp = client.create_tweet(text=text)
+    try:
+        me = client.get_me()
+        print("get_me OK: @" + me.data.username)
+    except Exception as e:
+        resp = getattr(e, "response", None)
+        print("get_me FAILED:", e, getattr(resp, "text", ""))
+    try:
+        resp = client.create_tweet(text=text)
+    except Exception as e:
+        r = getattr(e, "response", None)
+        print("create_tweet FAILED:", getattr(r, "text", e))
+        raise
     print("Posted tweet id", resp.data["id"])
 
 
