@@ -7,6 +7,7 @@ it tweets about it. Every finished game is appended to history.csv so the
 
 Usage:
     python scorigami_bot.py            # check once (dry run unless POST_LIVE=true)
+    python scorigami_bot.py --watch    # keep checking every minute while a game is on (~25 min)
     python scorigami_bot.py --stats    # print history summary
 Env (from .env locally, or GitHub secrets):
     CONSUMER_KEY, CONSUMER_SECRET, ACCESS_TOKEN, ACCESS_TOKEN_SECRET
@@ -17,6 +18,7 @@ import json
 import math
 import os
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -326,3 +328,65 @@ def run():
             before = list(rows)  # history without this game
             # Record the game FIRST so a crash can never cause a duplicate tweet.
             append_history(g)
+            rows.append({k: str(v) for k, v in g.items()})
+            seen_ids.add(g["espn_id"])
+            seen_keys.add((g["date"], g["msu"], g["opp"]))
+            seen_pairs.add(pair)
+            print(f"{g['date']}  MSU {g['msu']} - {g['opp']} {g['opponent']}  ->",
+                  "SCORIGAMI" if is_new else "seen before")
+            text = build_tweet(g, before, len(seen_pairs), len(rows))
+            print(text)
+            if live:
+                try:
+                    post(text)
+                except Exception as e:  # keep going; game is already recorded
+                    print("TWEET FAILED:", e)
+                    raise
+            else:
+                print("(dry run: set POST_LIVE=true to tweet)")
+
+    try:
+        run_live(rows, seen_pairs, live)
+    except Exception as e:  # live tweets are a bonus; never break the main job
+        print("live-game check failed:", e)
+
+
+def game_active(year, now=None):
+    """True if an MSU game is live or starts within the next 3 hours."""
+    now = now or datetime.now(ZoneInfo("UTC"))
+    for seasontype in (2, 3):
+        r = requests.get(ESPN, params={"season": year, "seasontype": seasontype}, timeout=30)
+        r.raise_for_status()
+        for e in r.json().get("events", []):
+            state = e["competitions"][0]["status"]["type"].get("state")
+            if state == "in":
+                return True
+            if state == "pre":
+                start = datetime.fromisoformat(e["date"].replace("Z", "+00:00"))
+                if 0 <= (start - now).total_seconds() <= 3 * 3600:
+                    return True
+    return False
+
+
+def watch(minutes=25, every=60):
+    """Check every minute for ~25 min; stop early if no game is on or near."""
+    end = time.time() + minutes * 60
+    while True:
+        try:
+            active = any(game_active(y) for y in current_season_years())
+        except Exception as e:
+            print("schedule check failed:", e)
+            active = True
+        run()                       # always run once AFTER the active check
+        if not active or time.time() + every > end:
+            break
+        time.sleep(every)
+
+
+if __name__ == "__main__":
+    if "--stats" in sys.argv:
+        stats()
+    elif "--watch" in sys.argv:
+        watch()
+    else:
+        run()
