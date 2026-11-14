@@ -82,7 +82,7 @@ def fetch_finished_games(year):
             when = datetime.fromisoformat(e["date"].replace("Z", "+00:00")).astimezone(TZ)
             games.append({
                 "date": when.strftime("%Y-%m-%d"),
-                "opponent": opp["team"].get("displayName", "Opponent"),
+                "opponent": opp["team"].get("location") or opp["team"].get("displayName", "Opponent"),
                 "msu": _score(msu),
                 "opp": _score(opp),
                 "espn_id": e["id"],
@@ -97,7 +97,7 @@ def score_key(a, b):
 
 def ordinal(n):
     suf = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
-    return f"{n}{suf}"
+    return f"{n:,}{suf}"
 
 
 def pretty_date(iso):
@@ -115,23 +115,22 @@ def build_tweet(game, rows, unique_count, total_games):
     hi, lo = score_key(m, o)
     result = "defeated" if m > o else "fell to"
     matches = previous_matches(rows, (hi, lo))
-    a = "An" if str(hi).startswith("8") or hi in (11, 18) else "A"
     if not matches:
         text = (
             f"🚨 SCORIGAMI! 🚨\n\n"
             f"Michigan State {result} {game['opponent']} {m}-{o}.\n\n"
-            f"{a} {hi}-{lo} final has never happened in Spartan basketball history (either way).\n\n"
-            f"Score #{unique_count:,} out of {total_games:,} games. #GoGreen"
+            f"No Spartan men's basketball game has ever ended {hi}-{lo}.\n\n"
+            f"That's the {ordinal(unique_count)} different final score in {total_games:,} games. #GoGreen"
         )
     else:
         last = max(matches, key=lambda r: r["date"])
         lm, lo_pts = int(last["msu"]), int(last["opp"])
         wl = "W" if lm > lo_pts else "L"
         n = len(matches)
-        times = "1 time" if n == 1 else f"{n} times"
+        times = "once" if n == 1 else f"{n} times"
         text = (
             f"Final: Michigan State {m}, {game['opponent']} {o}.\n\n"
-            f"No scorigami. {a} {hi}-{lo} final has happened {times} before, "
+            f"Not a scorigami. {hi}-{lo} has happened {times} before, "
             f"most recently on {pretty_date(last['date'])} "
             f"({wl} {lm}-{lo_pts} vs {last['opponent']}).\n\n#GoGreen"
         )
@@ -142,22 +141,12 @@ def build_tweet(game, rows, unique_count, total_games):
 
 def post(text):
     import tweepy
-    keys = {k: os.environ.get(k, "") for k in
-            ("CONSUMER_KEY", "CONSUMER_SECRET", "ACCESS_TOKEN", "ACCESS_TOKEN_SECRET")}
-    for k, v in keys.items():
-        print(f"{k}: length {len(v)}" + (f", starts {v[:4]}" if k == "CONSUMER_KEY" else ""))
     client = tweepy.Client(
-        consumer_key=keys["CONSUMER_KEY"],
-        consumer_secret=keys["CONSUMER_SECRET"],
-        access_token=keys["ACCESS_TOKEN"],
-        access_token_secret=keys["ACCESS_TOKEN_SECRET"],
+        consumer_key=os.environ["CONSUMER_KEY"],
+        consumer_secret=os.environ["CONSUMER_SECRET"],
+        access_token=os.environ["ACCESS_TOKEN"],
+        access_token_secret=os.environ["ACCESS_TOKEN_SECRET"],
     )
-    try:
-        me = client.get_me()
-        print("get_me OK: @" + me.data.username)
-    except Exception as e:
-        resp = getattr(e, "response", None)
-        print("get_me FAILED:", e, getattr(resp, "text", ""))
     try:
         resp = client.create_tweet(text=text)
     except Exception as e:
@@ -212,7 +201,7 @@ def fetch_live_games(year):
             status = {**hc.get("status", {}), **comp["status"]}
             live.append({
                 "espn_id": e["id"],
-                "opponent": opp["team"].get("displayName", "Opponent"),
+                "opponent": opp["team"].get("location") or opp["team"].get("displayName", "Opponent"),
                 "msu": int(msu["score"]),
                 "opp": int(opp["score"]),
                 "period": int(status.get("period", 0)),
@@ -341,24 +330,25 @@ def run():
             pair = score_key(g["msu"], g["opp"])
             is_new = pair not in seen_pairs
             before = list(rows)  # history without this game
-            # Record the game FIRST so a crash can never cause a duplicate tweet.
+            print(f"{g['date']}  MSU {g['msu']} - {g['opp']} {g['opponent']}  ->",
+                  "SCORIGAMI" if is_new else "seen before")
+            text = build_tweet(g, before, len(seen_pairs) + (1 if is_new else 0), len(rows) + 1)
+            print(text)
+            if not live:
+                print("(dry run: set POST_LIVE=true to tweet; game not recorded)")
+                continue
+            # Tweet FIRST. If posting fails the game is not recorded, so the
+            # next run retries it instead of skipping it forever.
+            try:
+                post(text)
+            except Exception as e:
+                print("TWEET FAILED:", e)
+                raise
             append_history(g)
             rows.append({k: str(v) for k, v in g.items()})
             seen_ids.add(g["espn_id"])
             seen_keys.add((g["date"], g["msu"], g["opp"]))
             seen_pairs.add(pair)
-            print(f"{g['date']}  MSU {g['msu']} - {g['opp']} {g['opponent']}  ->",
-                  "SCORIGAMI" if is_new else "seen before")
-            text = build_tweet(g, before, len(seen_pairs), len(rows))
-            print(text)
-            if live:
-                try:
-                    post(text)
-                except Exception as e:  # keep going; game is already recorded
-                    print("TWEET FAILED:", e)
-                    raise
-            else:
-                print("(dry run: set POST_LIVE=true to tweet)")
 
     try:
         run_live(rows, seen_pairs, live)
